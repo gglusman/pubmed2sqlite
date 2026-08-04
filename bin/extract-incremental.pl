@@ -12,15 +12,10 @@ my $pubIdsFile = "pub-ids.txt";
 my $authFile = "author-info.txt";
 my $infoFile = "pub-info.txt";
 my $accessionsFile = "pub-acc.txt";
-my $isbFile = "isb-papers.txt";
 my @idTypes = qw/pubmed pmc doi pii mid pmcid medline pmpid/;
 my $dir = "sections";
 mkdir $dir, 0755;
-#print PT join("\t", qw/pmid pub_type/), "\n";
-#print PI join("\t", @idTypes), "\n";
-#print PF join("\t", qw/pmid mesh mesh_major qual qual_major/), "\n";
-#print PN join("\t", qw/pmid year lastname forename initials affiliation/), "\n";
-#print PII join("\t", qw/pmid section firstauthor year journal title abstract/), "\n";
+
 my(%meshName, %qualName);
 foreach my $file (shuffle(@ARGV)) {
 	my($section) = $file =~ /n(\d+)\.xml/;
@@ -33,7 +28,6 @@ foreach my $file (shuffle(@ARGV)) {
 	open PN, "| gzip -c > $dir/$section/$authFile.gz";
 	open PII, "| gzip -c > $dir/$section/$infoFile.gz";
 	open PAC, "| gzip -c > $dir/$section/$accessionsFile.gz";
-	open ISB, ">$dir/$section/$isbFile";
 	my(%art, %au, %date);
 	open X, "gunzip -c $file |";
 	while (<X>) {
@@ -82,9 +76,6 @@ foreach my $file (shuffle(@ARGV)) {
 		} elsif (/^\s*<Affiliation[^>]*>(.+?)<\/Affiliation>/) {
 			my $aff = $1;
 			print PN join("\t", $art{'pubmed'}, $date{'year'}, $au{'last'}, $au{'fore'}, $au{'init'}, $aff), "\n";
-			if ($aff =~ /systems? biology/i && $aff =~ /seattle/i && $aff !~ /Centre O3/) {
-				print ISB join("\t", $art{'pubmed'}, $date{'year'}, $au{'last'}, $au{'fore'}, $au{'init'}, $aff), "\n";
-			}
 		} elsif (/^\s*<\/Author>/) {
 			%au = ();
 		} elsif (/^          <Title[^>]*>(.+)<\/Title>/) {
@@ -117,8 +108,6 @@ foreach my $file (shuffle(@ARGV)) {
 		}
 	}
 	close X;
-	#dumpMesh();
-	close ISB;
 	close PAC;
 	close PII;
 	close PN;
