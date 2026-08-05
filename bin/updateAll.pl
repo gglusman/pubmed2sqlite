@@ -13,7 +13,8 @@ rename "deleted.pmids.gz", "deleted.pmids.prev.gz";
 
 # Extract new content from downloads
 doLog("Extracting new content");
-`bin/extract-incremental.pl baseline/*.gz updatefiles/*.gz >> extract-incremental.log`;
+#`bin/extract-incremental-regex.pl baseline/*.gz updatefiles/*.gz >> extract-incremental.log`;
+`python3 bin/extract_incremental_xml.py baseline/*.gz updatefiles/*.gz >> extract-incremental.log`;
 
 # Enumerate sections, ids, pmcids
 doLog("Enumerating ids");
