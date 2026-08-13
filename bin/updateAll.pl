@@ -4,6 +4,8 @@ $|=1;
 
 my $dbfile = "/ssd2/gglusman/PubMed.db";
 my $deployedfile = "/ssd2/sqlite/PubMed.db";
+my $dbfileabstracts = "/ssd2/gglusman/PubMedAbstracts.db";
+my $deployedfileabstracts = "/ssd2/sqlite/PubMedAbstracts.db";
 
 # Update downloads
 doLog("Initiating update");
@@ -53,7 +55,7 @@ while (my($id, $section) = each %section) {
 close TODO;
 
 # Recreate sqlite db
-doLog("Rebuilding db");
+doLog("Rebuilding metadata db");
 `python3 bin/buildPubMedSqlite.py > pybuildSqlite.log`;
 
 my $prevsize = -s $deployedfile;
@@ -65,8 +67,25 @@ if ($ratio < 1.1 && $ratio > 0.9) {
 	`chgrp www-data $deployedfile`;
 	`chmod g+w $deployedfile`;
 } else {
-	doLog("size ratio $ratio outside range 0.9 - 1.1, not deploying");
+	doLog("metadata: size ratio $ratio outside range 0.9 - 1.1, not deploying");
 }
+
+# Recreate abstracts sqlite db
+doLog("Rebuilding abstracts db");
+`python3 bin/buildAbstractIndex.py >& buildAbstractIndex.log`;
+
+$prevsize = -s $deployedfileabstracts;
+$newsize  = -s $dbfileabstracts;
+$ratio = $newsize/$prevsize;
+if ($ratio < 1.1 && $ratio > 0.9) {
+	doLog("deploying $dbfileabstracts to $deployedfileabstracts");
+	`mv $dbfileabstracts $deployedfileabstracts`;
+	`chgrp www-data $deployedfileabstracts`;
+	`chmod g+w $deployedfileabstracts`;
+} else {
+	doLog("abstracts: size ratio $ratio outside range 0.9 - 1.1, not deploying");
+}
+
 doLog("done");
 
 

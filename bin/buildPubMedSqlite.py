@@ -69,7 +69,7 @@ sections = os.listdir(dir)
 sections = sorted(sections, reverse=True)
 
 ### Build the tables
-buildTable(db, 'acc', 'pub-acc.txt.gz', {'pmid': int, 'acc': str}, ['pmid', 'acc'])
+buildTable(db, 'acc', 'pub-acc.txt.gz', {'pmid': int, 'bank': str, 'acc': str}, ['pmid', 'bank', 'acc'])
 
 buildTable(db, 'mesh', 'pmid-mesh.txt.gz', {'pmid': int, 'pmcid': int, 'mesh': str, 'mesh_major': str, 'qual': str, 'qual_major': str}, ['pmid', 'pmcid', 'mesh', 'qual'])
 

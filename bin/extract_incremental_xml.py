@@ -54,15 +54,29 @@ def extract_year(article, pubmed_data):
 
 def extract_accessions(article):
 	accs = []
-	for acc_elem in article.findall(".//AccessionNumber"):
+	seen_elems = []  # keep element refs alive: lxml proxies aren't stable across findall calls
+
+	def add(bank, acc_elem):
+		seen_elems.append(acc_elem)
 		text = clean_text(acc_elem)
 		if not text:
-			continue
+			return
 		ncts = NCT_RE.findall(text)
 		if ncts:
-			accs.extend(ncts)
+			accs.extend((bank, nct) for nct in ncts)
 		else:
-			accs.append(text)
+			accs.append((bank, text))
+
+	for data_bank in article.findall("DataBankList/DataBank"):
+		bank = find_text(data_bank, "DataBankName")
+		for acc_elem in data_bank.findall("AccessionNumberList/AccessionNumber"):
+			add(bank, acc_elem)
+
+	# fallback: accessions found outside the expected DataBank structure
+	for acc_elem in article.findall(".//AccessionNumber"):
+		if not any(acc_elem is seen for seen in seen_elems):
+			add("", acc_elem)
+
 	return accs
 
 
@@ -120,8 +134,8 @@ def process_article(pubmed_article, pmid, section, writers):
 		else:
 			writers["mesh"].write("\t".join([pmid, mesh_ui, mesh_major, "", ""]) + "\n")
 
-	for accession in extract_accessions(article):
-		writers["acc"].write("\t".join([pmid, accession]) + "\n")
+	for bank, accession in extract_accessions(article):
+		writers["acc"].write("\t".join([pmid, bank, accession]) + "\n")
 
 	ids = {"pubmed": pmid}
 	if pubmed_data is not None:
