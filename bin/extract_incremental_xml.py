@@ -94,11 +94,16 @@ def process_article(pubmed_article, pmid, section, writers):
 	if not title:
 		title = find_text(article, "VernacularTitle")
 
+	# Keep the section label ("BACKGROUND", "METHODS", ...) as a "LABEL: " prefix,
+	# matching buildAbstractIndex.py and NCBI's own MedCPT corpus. Dropping it
+	# measurably shifts MedCPT embeddings for the ~25% of records with structured
+	# abstracts; see trials-papers/doc/design.md.
 	abstract_parts = []
 	for abstract_text in article.findall("Abstract/AbstractText"):
 		text = clean_text(abstract_text)
 		if text:
-			abstract_parts.append(text)
+			label = abstract_text.get("Label")
+			abstract_parts.append(f"{label}: {text}" if label else text)
 	abstract = " ".join(abstract_parts)
 
 	year = extract_year(article, pubmed_data) if pubmed_data is not None else ""
