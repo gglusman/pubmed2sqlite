@@ -35,7 +35,7 @@ def buildTable(db, table, sourcefile, fields, indexBy):
 				*values, = line.strip().split('\t')
 				pmid = values[0]
 				if not pmid: continue
-				if pmid in sectionmap and section != sectionmap[pmid]: continue
+				if pmid not in sectionmap or section != sectionmap[pmid]: continue
 				if table == 'ids': # table-specific code:
 					seen = {}
 					for alt in values[1:]:
