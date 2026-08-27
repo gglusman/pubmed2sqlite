@@ -5,12 +5,19 @@
 # lxml element trees instead of line-oriented regexes.
 
 import gzip
+import os
 import re
+import shutil
 import sys
 
 from lxml import etree
 
 ID_TYPES = ["pubmed", "pmc", "doi", "pii", "mid", "pmcid", "medline", "pmpid"]
+
+# Written last, inside a section directory, to certify that every output file
+# was closed cleanly. updatePubMedSqlite.py refuses to apply a section without
+# it. See bin/pubmed_tables.py (COMPLETE_MARKER).
+COMPLETE_MARKER = ".complete"
 
 SECTION_FILES = {
 	"mesh": "pmid-mesh.txt",
@@ -163,10 +170,18 @@ def extract_file(path, out_dir):
 	if section_dir.exists():
 		return
 
+	# Build in a scratch directory and rename it into place only once every
+	# output file is closed. The guard above is directory-existence based, so a
+	# section left half-written by a crash would otherwise be skipped forever --
+	# and, worse, the incremental DB updater would treat it as authoritative.
+	staging = out_dir / f".tmp-{section}-{os.getpid()}"
+	if staging.exists():
+		shutil.rmtree(staging)
+
 	print(path)
-	section_dir.mkdir(parents=True, exist_ok=True)
+	staging.mkdir(parents=True)
 	writers = {
-		key: gzip.open(section_dir / f"{name}.gz", "wt")
+		key: gzip.open(staging / f"{name}.gz", "wt")
 		for key, name in SECTION_FILES.items()
 	}
 
@@ -181,14 +196,58 @@ def extract_file(path, out_dir):
 				pubmed_article.clear()
 				while pubmed_article.getprevious() is not None:
 					del pubmed_article.getparent()[0]
-	finally:
+	except BaseException:
 		for writer in writers.values():
 			writer.close()
+		shutil.rmtree(staging, ignore_errors=True)
+		raise
+	for writer in writers.values():
+		writer.close()
+	(staging / COMPLETE_MARKER).touch()
+	try:
+		staging.rename(section_dir)
+	except OSError:
+		# Another worker finished the same section first; ours is redundant.
+		shutil.rmtree(staging, ignore_errors=True)
 
 
 def _extract_one(args):
 	path, out_dir = args
 	extract_file(path, out_dir)
+
+
+def backfill_markers(out_dir):
+	"""One-off migration: certify section directories written before markers existed.
+
+	A section counts as complete only if all six output files are present and
+	each one is a readable gzip stream all the way to EOF.
+	"""
+	marked = skipped = broken = 0
+	for section_dir in sorted(p for p in out_dir.iterdir() if p.is_dir()):
+		if (section_dir / COMPLETE_MARKER).exists():
+			skipped += 1
+			continue
+		bad = None
+		for name in SECTION_FILES.values():
+			path = section_dir / f"{name}.gz"
+			if not path.exists():
+				bad = f"{name}.gz missing"
+				break
+			try:
+				with gzip.open(path, "rb") as fh:
+					while fh.read(1 << 20):
+						pass
+			except OSError as exc:
+				bad = f"{name}.gz unreadable: {exc}"
+				break
+		if bad:
+			print(f"INCOMPLETE {section_dir}: {bad}", file=sys.stderr)
+			broken += 1
+			continue
+		(section_dir / COMPLETE_MARKER).touch()
+		marked += 1
+	print(f"marked {marked}, already marked {skipped}, incomplete {broken}")
+	return 1 if broken else 0
 
 
 def main():
@@ -199,18 +258,31 @@ def main():
 	args = sys.argv[1:]
 	out_dir = Path("sections")
 	workers = min(32, os.cpu_count() or 1)
+	backfill = False
 	while args and args[0].startswith("--"):
 		if args[0].startswith("--outdir="):
 			out_dir = Path(args[0].split("=", 1)[1])
 		elif args[0].startswith("--workers="):
 			workers = int(args[0].split("=", 1)[1])
+		elif args[0] == "--backfill-markers":
+			backfill = True
 		args = args[1:]
 
+	if backfill:
+		sys.exit(backfill_markers(out_dir))
+
 	if not args:
-		print(f"usage: {sys.argv[0]} [--outdir=DIR] [--workers=N] <file.xml.gz> [file.xml.gz ...]", file=sys.stderr)
+		print(f"usage: {sys.argv[0]} [--outdir=DIR] [--workers=N] <file.xml.gz> [file.xml.gz ...]\n"
+		      f"       {sys.argv[0]} [--outdir=DIR] --backfill-markers", file=sys.stderr)
 		sys.exit(1)
 
 	out_dir.mkdir(exist_ok=True, parents=True)
+
+	# Scratch directories from a killed run: safe to discard, the sections they
+	# were building were never renamed into place.
+	for stale in out_dir.glob(".tmp-*"):
+		print(f"removing stale {stale}", file=sys.stderr)
+		shutil.rmtree(stale, ignore_errors=True)
 
 	with ProcessPoolExecutor(max_workers=workers) as pool:
 		list(pool.map(_extract_one, [(path, out_dir) for path in args]))
