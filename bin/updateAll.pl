@@ -169,6 +169,7 @@ sub deploy {
 	# updated on success, so a failed run re-applies the same delta next time
 	# instead of losing it.
 	run("cp $deleted $applied");
+	`cd /15TB_2/gglusman/datasets/trials-papers && ./bin/run_update.sh pubmed &`;
 	doLog("done");
 }
 
