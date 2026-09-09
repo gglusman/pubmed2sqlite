@@ -213,7 +213,15 @@ def extract_file(path, out_dir):
 
 def _extract_one(args):
 	path, out_dir = args
-	extract_file(path, out_dir)
+	try:
+		extract_file(path, out_dir)
+	except Exception as e:
+		# Exceptions cross the process boundary by pickling, and some carry
+		# state that will not pickle -- lxml's XMLSyntaxError holds a
+		# _ListErrorLog, so the parent receives an opaque "cannot pickle"
+		# TypeError with the real cause and the offending filename stripped
+		# out. Flatten to a plain RuntimeError that names the file.
+		raise RuntimeError(f"{path}: {type(e).__name__}: {e}") from None
 
 
 def backfill_markers(out_dir):

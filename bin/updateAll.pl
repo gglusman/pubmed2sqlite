@@ -38,7 +38,10 @@ my $applied      = "deleted.pmids.applied.gz";  # the copy the deployed db refle
 my $deletedurl   = "https://ftp.ncbi.nlm.nih.gov/pubmed/deleted.pmids.gz";
 
 my $mode = 'incremental';
+my $verifiedfile = "downloads.verified";        # md5-checked downloads, keyed by size+mtime
+
 my($nodeploy, $skipdownload, $refreshidlist, $integritycheck) = (0, 0, 0, 0);
+my $verifyall = 0;
 foreach my $arg (@ARGV) {
 	if    ($arg eq '--full')            { $mode = 'full' }
 	elsif ($arg eq '--incremental')     { $mode = 'incremental' }
@@ -46,7 +49,8 @@ foreach my $arg (@ARGV) {
 	elsif ($arg eq '--skip-download')   { $skipdownload = 1 }
 	elsif ($arg eq '--refresh-idlist')  { $refreshidlist = 1 }
 	elsif ($arg eq '--integrity-check') { $integritycheck = 1 }
-	else { die "usage: $0 [--full|--incremental] [--no-deploy] [--skip-download] [--refresh-idlist] [--integrity-check]\n" }
+	elsif ($arg eq '--verify-downloads'){ $verifyall = 1 }
+	else { die "usage: $0 [--full|--incremental] [--no-deploy] [--skip-download] [--refresh-idlist] [--integrity-check] [--verify-downloads]\n" }
 }
 
 # Set when a candidate database is worth keeping for inspection rather than
@@ -68,7 +72,11 @@ exit 0;
 sub main {
 	doLog("Initiating update (mode: $mode)");
 	unless ($skipdownload) {
-		run("wget -q -r -nc 'ftp://ftp.ncbi.nlm.nih.gov/pubmed/updatefiles/'", allow_failure => 1);
+		# -N, not -nc: no-clobber keeps whatever is on disk forever, so a file
+		# that arrived corrupt was never refetched and every later run failed on
+		# it identically. Timestamping also picks up files NCBI revises in place.
+		run("wget -q -r -N 'ftp://ftp.ncbi.nlm.nih.gov/pubmed/updatefiles/'", allow_failure => 1);
+		verifyDownloads('updatefiles', 'baseline');
 		refreshDeletedList();
 	}
 
@@ -206,6 +214,100 @@ sub noop {
 	my $json = <$fh>;
 	close $fh;
 	return $json =~ /"noop":\s*true/ ? 1 : 0;
+}
+
+sub verifyDownloads {
+	# NCBI ships an .md5 sidecar next to every archive; nothing used to read
+	# them. On 2026-09-07 and 09-08 two update files arrived corrupt -- same
+	# byte count as the originals, scrambled content partway in -- so neither a
+	# size check nor wget's timestamping would ever have noticed, and the
+	# extractor died on malformed XML for two nights running.
+	#
+	# Hashing every archive nightly would mean ~80GB of md5 per run, so results
+	# are cached: a file is re-hashed only when its size or mtime differs from
+	# the recorded pass. Steady state is one new file per night.
+	my(@dirs) = @_;
+	my $verified = readVerified();
+	my($checked, $repaired, $cached) = (0, 0, 0);
+
+	foreach my $dir (@dirs) {
+		foreach my $name (sort grep { /\.xml\.gz$/ } fulldirlist($dir)) {
+			my $path = "$dir/$name";
+			my $stamp = fileStamp($path) or next;
+			if (!$verifyall and ($verified->{$path} // '') eq $stamp) { $cached++; next }
+
+			$checked++;
+			next if checkAndRecord($dir, $name, $verified);
+
+			# Bad copy. wget -N compares size and mtime, and a same-size
+			# corruption matches both, so the local file has to go first.
+			doLog("WARNING: $path failed its md5 check; refetching");
+			unlink $path;
+			run("wget -q -O $path 'ftp://ftp.ncbi.nlm.nih.gov/pubmed/$dir/$name'", allow_failure => 1);
+			checkAndRecord($dir, $name, $verified)
+				or die "$path is still corrupt after refetching; NCBI may be serving a bad copy";
+			$repaired++;
+		}
+	}
+
+	writeVerified($verified);
+	doLog("Verified downloads: $checked hashed ($repaired repaired), $cached cached");
+}
+
+sub checkAndRecord {
+	# Compare one archive against its sidecar, recording a pass in $verified.
+	my($dir, $name, $verified) = @_;
+	my $path = "$dir/$name";
+	-s $path or return 0;
+
+	my $expected = readMd5Sidecar("$path.md5");
+	unless ($expected) {
+		# No sidecar to check against: fall back to gzip's own CRC, which at
+		# least catches the corruption seen here, and do not cache the result.
+		return run("gzip -t $path", allow_failure => 1) == 0;
+	}
+
+	my $got = `md5sum $path`;
+	$got = ($got =~ /^([0-9a-f]{32})/) ? $1 : '';
+	return 0 unless $got and lc($got) eq lc($expected);
+
+	$verified->{$path} = fileStamp($path);
+	return 1;
+}
+
+sub readMd5Sidecar {
+	# NCBI's format is: MD5(pubmed26n1614.xml.gz)= 6773dec8...
+	my($file) = @_;
+	open my $fh, '<', $file or return undef;
+	my $line = <$fh>;
+	close $fh;
+	return ($line and $line =~ /([0-9a-fA-F]{32})/) ? lc($1) : undef;
+}
+
+sub fileStamp {
+	my($path) = @_;
+	my($size, $mtime) = (stat $path)[7, 9];
+	return defined($size) ? "$size:$mtime" : undef;
+}
+
+sub readVerified {
+	my %verified;
+	open my $fh, '<', $verifiedfile or return \%verified;
+	while (<$fh>) {
+		chomp;
+		my($path, $stamp) = split /\t/;
+		$verified{$path} = $stamp if defined $stamp;
+	}
+	close $fh;
+	return \%verified;
+}
+
+sub writeVerified {
+	my($verified) = @_;
+	open my $fh, '>', "$verifiedfile.tmp" or die "write $verifiedfile.tmp: $!";
+	print $fh join("\t", $_, $verified->{$_}), "\n" foreach sort keys %$verified;
+	close $fh;
+	rename "$verifiedfile.tmp", $verifiedfile or die "rename $verifiedfile.tmp: $!";
 }
 
 sub refreshDeletedList {
